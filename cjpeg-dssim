@@ -14,6 +14,7 @@
 #
 # Required tools:
 #	* ImageMagick >= v.6
+#	* GraphicsMagick (alternative to ImageMagick)
 #	* dssim - https://github.com/pornel/dssim
 #	* jpegoptim - https://github.com/tjko/jpegoptim
 #	* mozjpeg - https://github.com/mozilla/mozjpeg
@@ -46,6 +47,8 @@ elif [ -n $1 ] && [ -n $2 ]; then
 else
 	exit 1
 fi
+
+IMAGE_PROCESSOR="$3"
 
 # Path and filename retrieval to save the output image
 CLEANFILENAME=${INPUTFILE%.jp*g}
@@ -84,6 +87,7 @@ OUTPUTFILESUFFIX="_cjpeg_dssim"
 
 main () {
 	define_encoder_toolbelt
+	define_conversion_tool
 	local -i __current_jpeg_quality=$(optimize_quality_level ${INITIAL_JPEG_QUALITY} ${JPEG_QUALITY_SUMMAND_SUBTRAHEND})
 	$(eval ${JPEG_COMPRESSION_COMMAND} > "${CLEANPATH}${CLEANFILENAME##*/}${OUTPUTFILESUFFIX}".${FILEEXTENSION});
 }
@@ -103,6 +107,16 @@ function define_encoder_toolbelt () {
 	esac
 }
 
+function define_conversion_tool () {
+	# Define conversion tool
+	case ${IMAGE_PROCESSOR} in
+		"gmagick") CONVERSION_COMMAND="gm convert";;
+		"imagick") ;&
+		"") CONVERSION_COMMAND="convert";;
+	   *) echo "Supported JPEG conversion methods: imagick | gmagick"; exit 1;;
+	esac
+}
+
 function optimize_quality_level () {
 	local -i __current_jpeg_quality=$1
 	local -i __current_jpeg_quality_summand_subtrahend=$2
@@ -110,7 +124,7 @@ function optimize_quality_level () {
 	local __current_dssim_score="0"
 	# Convert the original JPEG to PNG for DSSIM comparison
 	# Also base64 it so we can safely store its result in a variable without needing to write the file to disk
-	__original_image_png_base64=$(convert "${INPUTFILE}" png:- | base64)
+	__original_image_png_base64=$(${CONVERSION_COMMAND} "${INPUTFILE}" png:- | base64)
 	# While the result of the current run is either too similar (ecouraging stronger compression) or too different (already too many artifacts visible), run the compression again while homing in on a proper quality setting for the current encoder
 	while ( (( $(echo "${__current_dssim_score} >= ${DSSIM_UPPER_BOUND}" | bc -l) )) || (( $(echo "${__current_dssim_score} < ${DSSIM_LOWER_BOUND}" | bc -l) )) ) && (( ${__iteration_counter}<7 )); do
 		# Retrieve the current dissimilarity score
@@ -136,7 +150,7 @@ function optimize_quality_level () {
 function calculate_dissimilarity () {
 	local __current_jpeg_quality=$1
 	# Run the JPEG compressor, pipe its output to convert, create a PNG from the newly compressed JPEG and hand it to DSSIM for comparison - all without creating a file on disk to increase runtime performance
-	local __current_dissimilarity=$(eval ${JPEG_COMPRESSION_COMMAND} | convert - png:- | dssim <(echo "${__original_image_png_base64}" | base64 --decode) /dev/stdin | awk '{print $1}')
+	local __current_dissimilarity=$(eval ${JPEG_COMPRESSION_COMMAND} | ${CONVERSION_COMMAND} - png:- | dssim <(echo "${__original_image_png_base64}" | base64 --decode) /dev/stdin | awk '{print $1}')
 	echo ${__current_dissimilarity}
 }
 
